@@ -1,0 +1,241 @@
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app)
+
+frontend_html = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>⚡ Dynamic Energy Optimizer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+body { font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:#e1bee7; margin:0; padding:2rem; display:flex; flex-direction:column; align-items:center; }
+h1 { color:#4a148c; text-align:center; margin-bottom:1rem; }
+form { background:#ce93d8; padding:2rem; border-radius:15px; box-shadow:0 6px 15px rgba(0,0,0,0.2); display:grid; grid-gap:1rem; width:100%; max-width:700px; }
+.appliance-row { display:flex; gap:10px; align-items:center; }
+input[type=range] { width:100%; }
+input, select, button { padding:8px; border-radius:8px; border:none; font-size:1rem; }
+button { border:none; background:#7b1fa2; color:white; cursor:pointer; transition:0.3s; }
+button:hover { background:#6a1b9a; }
+.result { margin-top:2rem; background:#d1c4e9; padding:1.5rem; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.2); width:100%; max-width:900px; display:none; }
+.result h3 { margin-top:0; color:#4a148c; text-align:center; }
+.suggestion { background:#f3e5f5; padding:10px; border-radius:8px; color:#4a148c; font-weight:bold; margin-top:10px;}
+.appliance-card { border:1px solid #ba68c8; border-radius:8px; padding:10px; margin-bottom:10px; background:#f3e5f5; }
+.summary-cards { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin-bottom:20px; }
+.summary-card { background:#f3e5f5; padding:15px; border-radius:10px; box-shadow:0 4px 8px rgba(0,0,0,0.1); min-width:150px; text-align:center; }
+.notification { position:fixed; top:20px; right:20px; background:#ab47bc; color:#fff; padding:12px 20px; border-radius:8px; box-shadow:0 4px 10px rgba(0,0,0,0.2); display:none; z-index:1000; }
+</style>
+</head>
+<body>
+
+<h1>⚡ Dynamic Energy Optimizer</h1>
+
+<form id="energyForm">
+    <div id="applianceContainer">
+        <div class="appliance-row">
+            <select name="appliance" required>
+                <option value="">--Choose Appliance--</option>
+                <option value="Air Conditioner">Air Conditioner</option>
+                <option value="Heater">Heater</option>
+                <option value="Washing Machine">Washing Machine</option>
+                <option value="Refrigerator">Refrigerator</option>
+                <option value="Lights">Lights</option>
+                <option value="Computer">Computer</option>
+            </select>
+            <label>Hours: <span class="hoursVal">1</span></label>
+            <input type="range" name="hours" min="0" max="12" value="1">
+            <label>Daily Cost ($): <span class="costVal">10</span></label>
+            <input type="range" name="cost" min="0" max="200" value="10">
+            <button type="button" class="removeBtn">❌</button>
+        </div>
+    </div>
+    <button type="button" id="addAppliance">➕ Add Appliance</button>
+    <button type="submit">Optimize Energy</button>
+</form>
+
+<div class="summary-cards" id="summaryCards"></div>
+
+<div class="result" id="result">
+    <h3>Optimization Results</h3>
+    <div id="applianceResults"></div>
+    <canvas id="barChart"></canvas>
+</div>
+
+<div class="notification" id="notification"></div>
+
+<script>
+const applianceContainer = document.getElementById('applianceContainer');
+const addBtn = document.getElementById('addAppliance');
+const form = document.getElementById('energyForm');
+const resultDiv = document.getElementById('result');
+const applianceResults = document.getElementById('applianceResults');
+const summaryCards = document.getElementById('summaryCards');
+const notification = document.getElementById('notification');
+
+function showNotification(msg) {
+    notification.textContent = msg;
+    notification.style.display = 'block';
+    return new Promise(resolve => {
+        setTimeout(() => { notification.style.display='none'; resolve(); }, 1500);
+    });
+}
+
+function updateSliderLabels(row){
+    const hoursInput = row.querySelector('input[name="hours"]');
+    const hoursVal = row.querySelector('.hoursVal');
+    const costInput = row.querySelector('input[name="cost"]');
+    const costVal = row.querySelector('.costVal');
+    hoursInput.addEventListener('input', ()=> hoursVal.textContent=hoursInput.value);
+    costInput.addEventListener('input', ()=> costVal.textContent=costInput.value);
+}
+
+addBtn.addEventListener('click', ()=>{
+    const div = document.createElement('div');
+    div.className='appliance-row';
+    div.innerHTML=`
+        <select name="appliance" required>
+            <option value="">--Choose Appliance--</option>
+            <option value="Air Conditioner">Air Conditioner</option>
+            <option value="Heater">Heater</option>
+            <option value="Washing Machine">Washing Machine</option>
+            <option value="Refrigerator">Refrigerator</option>
+            <option value="Lights">Lights</option>
+            <option value="Computer">Computer</option>
+        </select>
+        <label>Hours: <span class="hoursVal">1</span></label>
+        <input type="range" name="hours" min="0" max="12" value="1">
+        <label>Daily Cost ($): <span class="costVal">10</span></label>
+        <input type="range" name="cost" min="0" max="200" value="10">
+        <button type="button" class="removeBtn">❌</button>
+    `;
+    applianceContainer.appendChild(div);
+    div.querySelector('.removeBtn').addEventListener('click', ()=>div.remove());
+    updateSliderLabels(div);
+});
+
+document.querySelectorAll('.appliance-row').forEach(row => updateSliderLabels(row));
+document.querySelectorAll('.removeBtn').forEach(btn=>{btn.addEventListener('click', e=> e.target.parentElement.remove());});
+
+form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const rows = document.querySelectorAll('.appliance-row');
+    const appliances = [];
+    rows.forEach(row=>{
+        const appliance = row.querySelector('select').value;
+        const hours = row.querySelector('input[name="hours"]').value;
+        const cost = row.querySelector('input[name="cost"]').value;
+        if(appliance) appliances.push({appliance,hours,cost});
+    });
+
+    await showNotification("Appliances added! Preparing results...");
+
+    const res = await fetch('/predict',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({appliances})
+    });
+    const data = await res.json();
+
+    resultDiv.style.display='block';
+    applianceResults.innerHTML='';
+    summaryCards.innerHTML='';
+    const labels=[], usageData=[];
+    let totalMonthlyCost=0;
+
+    data.forEach(item=>{
+        labels.push(item.appliance);
+        usageData.push(item.hours);
+        totalMonthlyCost += item.monthly_cost;
+
+        applianceResults.innerHTML += `
+            <div class="appliance-card">
+                <p><strong>Appliance:</strong> ${item.appliance}</p>
+                <p><strong>Hours Used:</strong> ${item.hours}</p>
+                <p><strong>Daily Cost:</strong> $${item.cost}</p>
+                <p><strong>Estimated Monthly Cost:</strong> $${item.monthly_cost}</p>
+                <p><strong>Peak Usage Hours:</strong> ${item.predicted_peak_hours}</p>
+                <p class="suggestion">💡 ${item.suggestion}</p>
+            </div>
+        `;
+    });
+
+    summaryCards.innerHTML = `
+        <div class="summary-card">
+            <p><strong>Total Appliances:</strong> ${data.length}</p>
+        </div>
+        <div class="summary-card">
+            <p><strong>Total Estimated Monthly Cost:</strong> $${totalMonthlyCost}</p>
+        </div>
+    `;
+
+    const ctxBar = document.getElementById('barChart').getContext('2d');
+    if(window.barChart) window.barChart.destroy();
+    window.barChart = new Chart(ctxBar,{
+        type:'bar',
+        data:{
+            labels:labels,
+            datasets:[{
+                label:'Usage Hours',
+                data:usageData,
+                backgroundColor:'#4fc3f7',
+                borderRadius:6
+            }]
+        },
+        options:{
+            responsive:true,
+            plugins:{legend:{display:false}},
+            scales:{y:{beginAtZero:true, max:12, title:{display:true,text:'Hours'}}, x:{title:{display:true,text:'Appliances'}}}
+        }
+    });
+});
+</script>
+</body>
+</html>
+"""
+
+@app.route("/")
+def home():
+    return frontend_html
+
+@app.route("/predict", methods=["POST"])
+def predict():
+    data = request.json
+    appliances = data.get("appliances", [])
+    results = []
+
+    for item in appliances:
+        appliance = item.get("appliance","Unknown")
+        try: hours=int(item.get("hours",0))
+        except: hours=0
+        try: cost=float(item.get("cost",0))
+        except: cost=0
+
+        if hours>6:
+            peak="6 PM - 10 PM"
+            tip=f"⚠️ High usage! Reduce {appliance} or shift to off-peak hours."
+        elif hours>3:
+            peak="6 PM - 10 PM"
+            tip=f"✅ Moderate usage. Saving possible if used off-peak."
+        else:
+            peak="10 AM - 2 PM"
+            tip=f"👍 Efficient usage! Keep it efficient."
+
+        monthly_cost = round(cost*30,2)
+
+        results.append({
+            "appliance": appliance,
+            "hours": hours,
+            "cost": cost,
+            "monthly_cost": monthly_cost,
+            "predicted_peak_hours": peak,
+            "suggestion": tip
+        })
+
+    return jsonify(results)
+
+if __name__=="__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
